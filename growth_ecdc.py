@@ -109,7 +109,7 @@ for country, cases in cases_rel.items():
 
         prev_cases = cases[i - 1]
         grw = new_cases / prev_cases if prev_cases else 0
-        cases_grw[country].append(grw)
+        cases_grw[country].append(round(grw, 2))
 
 for country, deaths in deaths_rel.items():
     deaths_grw[country] = [0]
@@ -119,7 +119,8 @@ for country, deaths in deaths_rel.items():
 
         prev_deaths = deaths[i - 1]
         grw = new_deaths / prev_deaths if prev_deaths else 0
-        deaths_grw[country].append(grw)
+        # Round to 2 digits for friendly user presentation
+        deaths_grw[country].append(round(grw, 2))
 
 data = {
     "dates": {
