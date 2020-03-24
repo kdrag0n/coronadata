@@ -125,6 +125,7 @@ data = {
     "dates": {
         "start": start_isodate,
         "end": end_isodate,
+        "count": n_days,
     },
     "cases": {
         "absolute": cases_abs,
