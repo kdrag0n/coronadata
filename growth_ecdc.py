@@ -2,11 +2,13 @@
 
 # Province/State,Country/Region,Lat,Long,1/22/20,1/23/20,...
 
+from datetime import datetime
 import json
 import sys
 
 import pycountry
 import xlrd
+import pytz
 
 cases_abs = {}
 cases_rel = {}
@@ -28,7 +30,9 @@ country_overrides = {
 }
 
 def row_to_iso_date(row):
-    return f"{row[3].value:02.0f}-{row[2].value:02.0f}-{row[1].value:02.0f}"
+    date = datetime(int(row[3].value), int(row[2].value), int(row[1].value), 10, 0, 0, 0)
+    tz_date = pytz.timezone("Europe/Brussels").localize(date)
+    return tz_date.isoformat()
 
 with xlrd.open_workbook(sys.argv[1]) as wb:
     sheet = wb.sheet_by_name("COVID-19-geographic-disbtributi")
