@@ -49,16 +49,19 @@ with xlrd.open_workbook(sys.argv[1]) as wb:
 
     n_days = end_xldate - start_xldate + 1
 
-    for xldate, day, month, year, cases, deaths, country, country_id in reversed(rows):
+    for row in reversed(rows):
         # Excel cells -> Python types
-        xldate = int(xldate.value)
-        day = int(day.value)
-        month = int(month.value)
-        year = int(year.value)
-        cases = int(cases.value)
-        deaths = int(deaths.value)
-        country = country.value
-        country_id = country_id.value
+        xldate = int(row[0].value)
+        day = int(row[1].value)
+        month = int(row[2].value)
+        year = int(row[3].value)
+        cases = int(row[4].value)
+        deaths = int(row[5].value)
+        country = row[6].value
+        country_id = row[7].value
+        if not row[8].value:
+            print(country)
+        #population = int(row[8].value)
 
         if country_id in country_overrides:
             country = country_overrides[country_id]
