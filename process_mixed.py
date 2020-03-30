@@ -1,81 +1,123 @@
 #!/usr/bin/env python
 
-# Province/State,Country/Region,Lat,Long,1/22/20,1/23/20,...
-
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+import csv
 import json
 import sys
 
 import pycountry
+import pytz
+import requests
 
-country_overrides = {
+country_id_overrides = {
     "DP": "Diamond Princess",
     "CD": "Democratic Republic of the Congo",
+    "COD": "Democratic Republic of the Congo",
     "VA": "Holy See",
+    "VAT": "Holy See",
     "IR": "Iran",
+    "IRN": "Iran",
     "PS": "Palestine",
+    "PSE": "Palestine",
     "RU": "Russia",
+    "RUS": "Russia",
     "KP": "North Korea",
+    "PRK": "North Korea",
     "KR": "South Korea",
-    "XK": "Kosovo"
+    "KOR": "South Korea",
+    "XK": "Kosovo",
+    "XKX": "Kosovo",
+    "VG": "British Virgin Islands",
+    "VGB": "British Virgin Islands",
+    "LA": "Laos",
+    "LAO": "Laos",
+    "SX": "Sint Maarten",
+    "SXM": "Sint Maarten",
+    "VI": "United States Virgin Islands",
+    "VIR": "United States Virgin Islands",
+    "FK": "Falkland Islands",
+    "FLK": "Falkland Islands",
+    "SYR": "Syria",
+    "SY": "Syria"
 }
 
-ecdc_countries = {
-    "French Guiana": None,
+geo_id_overrides = {
+    "JPG11668": "Diamond Princess"
+}
+
+# From Worldometer
+FALLBACK_POPULATION = 33_082_146  # world population / countries
+population_overrides = {
+    "Anguilla": 14969,
+    "Eritrea": 3_533_929
+}
+
+ecdc_combined_countries = {
+    # Missing country: merged into country
+    "French Guiana": "France",
     "Hong Kong": "China",
-    "Puerto Rico": "United States"
 }
 
 country_cache = {}
 
-def get_country_name(country_id):
-    if country_id in country_cache:
-        return country_cache[country_id]
+def get_country_name(country_id, geo_id=None, provided_name=""):
+    cache_key = (country_id, geo_id)
+    if cache_key in country_cache:
+        return country_cache[cache_key]
 
-    if country_id in country_overrides:
-        country_name = country_overrides[country_id]
+    if country_id in country_id_overrides:
+        country_name = country_id_overrides[country_id]
+    elif geo_id in geo_id_overrides:
+        country_name = geo_id_overrides[geo_id]
     else:
-        iso_country = pycountry.countries.get(alpha_2=country_id)
+        kwargs = {"alpha_" + str(len(country_id)): country_id}
+        iso_country = pycountry.countries.get(**kwargs)
         if iso_country is None:
-            print(country_id)
-            exit()
+            print(f"WARNING: Unknown country with ID '{country_id}', geo ID '{geo_id}', provided name '{provided_name}'", file=sys.stderr)
+            country_name = provided_name.replace("_", " ")
         else:
             country_name = getattr(iso_country, "common_name", iso_country.name)
 
-    country_cache[country_id] = country_name
+    country_cache[cache_key] = country_name
     return country_name
 
-with open(sys.argv[1], "r") as tf:
-    timeline = json.load(tf)["data"]
+with open(sys.argv[1], "r", encoding="iso-8859-1") as ef:
+    reader = csv.DictReader(ef)
+    ecdc = list(reader)
 
+live = {}
 with open(sys.argv[2], "r") as lf:
-    live = json.load(lf)["countryitems"][0].values()
+    live_map = json.load(lf)["countryitems"][0]
+    del live_map["stat"]
+    for entry in live_map.values():
+        country = get_country_name(entry["code"])
+        entry["total_cases"] = int(entry["total_cases"])
+        entry["total_deaths"] = int(entry["total_deaths"])
+        live[country] = entry
 
-with open(sys.argv[3], "r") as ef:
-    ecdc = json.load(ef)
-
-# Parse dates
-for entry in timeline:
-    month, day, year = map(int, entry["date"].split("/"))
-    year += 2000
-    date = datetime(year, month, day, 23, 59, 59, 0, timezone.utc)
-    entry["date"] = date
+# Parse ECDC dates
+for entry in ecdc:
+    day = int(entry["day"])
+    year = int(entry["year"])
+    month = int(entry["month"])
+    # 10:00:00 AM CE(S)T
+    date = datetime(year, month, day, 10, 0, 0, 0)
+    tz_date = pytz.timezone("Europe/Brussels").localize(date)
+    entry["date"] = tz_date
 
 # Get start and end dates
-start_date = min(timeline, key=lambda e: e["date"])["date"]
-end_date = datetime.now(timezone.utc)
-ecdc_date_offset = (start_date - datetime.fromisoformat(ecdc["dates"]["start"])).days
+start_date = min(ecdc, key=lambda e: e["date"])["date"]
+end_date = datetime.now(timezone.utc).replace(microsecond=0)
 
 # Calculate elapsed days
-n_days = (end_date - start_date).days + 2
-print(start_date, end_date, n_days)
+n_days = (end_date - start_date).days + 1
 
 # Create maps
 def date_list():
     return [0] * n_days
 
-data = {
+metrics = {
     "cases": {
         "absolute": defaultdict(date_list),
         "relative": defaultdict(date_list),
@@ -85,80 +127,67 @@ data = {
         "absolute": defaultdict(date_list),
         "relative": defaultdict(date_list),
         "growth": defaultdict(date_list),
-    },
-    "recovered": {
-        "absolute": defaultdict(date_list),
-        "relative": defaultdict(date_list),
-        "growth": defaultdict(date_list),
-    },
+    }
 }
 
-# Populate historical absolute data
-for entry in timeline:
-    country = get_country_name(entry["countrycode"])
+populations = {}
+
+# Populate historical relative metrics, and populations
+for entry in ecdc:
+    country_code = entry["countryterritoryCode"] or entry["geoId"]
+    country_name = get_country_name(country_code, entry["geoId"], entry["countriesAndTerritories"])
     cases = int(entry["cases"])
     deaths = int(entry["deaths"])
-    recovered = int(entry["recovered"])
 
     offset = (entry["date"] - start_date).days
-    print(entry["date"], offset)
-    data["cases"]["absolute"][country][offset] = cases
-    data["deaths"]["absolute"][country][offset] = deaths
-    data["recovered"]["absolute"][country][offset] = recovered
+    metrics["cases"]["relative"][country_name][offset] += cases
+    metrics["deaths"]["relative"][country_name][offset] += deaths
 
-# Populate live absolute data
-for entry in live:
-    # Ignore final {"stat": "ok"} value
-    if isinstance(entry, str):
-        continue
+    try:
+        population = int(entry["popData2018"] or population_overrides[country_name])
+    except KeyError:
+        print(f"WARNING: Unknown population for country {country_name} ({country_code}), using average", file=sys.stderr)
+        population = FALLBACK_POPULATION
 
+    populations[country_name] = population
+
+# Pre-process live metrics to account for ECDC combined countries
+for missing, target in ecdc_combined_countries.items():
+    print(missing, target)
+    if missing in live:
+        print(live[target]["total_cases"], live[missing]["total_cases"],live[target]["total_deaths"], live[missing]["total_deaths"])
+        live[target]["total_cases"] += live[missing]["total_cases"]
+        live[target]["total_deaths"] += live[missing]["total_deaths"]
+        del live[missing]
+
+# Populate live relative metrics based on absolute
+for entry in live.values():
     country = get_country_name(entry["code"])
-    cases = int(entry["total_cases"])
-    deaths = int(entry["total_deaths"])
-    recovered = int(entry["total_recovered"])
+    cases = entry["total_cases"]
+    deaths = entry["total_deaths"]
 
-    data["cases"]["absolute"][country][-1] = cases
-    data["deaths"]["absolute"][country][-1] = deaths
-    # Don't track recovered:
-    #     1. Unreliable
-    #     2. ECDC doesn't have it
-    # data["recovered"]["absolute"][country][-1] = recovered
-
-# Backfill historical data from ECDC
-for metric_name, metric in data.items():
-    for country, values in metric["absolute"].items():
-        for i, value in enumerate(values):
-            # Only backfill values older than the last two
-            if i == len(values) - 1:
-                break
-
-            # Fetch value from ECDC dataset if possible
-            if country in ecdc[metric_name]["absolute"]:
-                ecdc_vals = ecdc[metric_name]["absolute"][country]
-                backfill_idx = i + ecdc_date_offset
-                if backfill_idx < len(ecdc_vals):
-                    values[i] = ecdc_vals[backfill_idx]
+    cases_rel = metrics["cases"]["relative"][country]
+    cases_rel[-1] = cases - sum(cases_rel)
+    deaths_rel = metrics["deaths"]["relative"][country]
+    deaths_rel[-1] = deaths - sum(deaths_rel)
 
 # Add a meta "Total" country
-for metric in data.values():
-    vals = metric["absolute"]
+for metric in metrics.values():
+    vals = metric["relative"]
     for i in range(n_days):
         vals["Total"][i] = sum(cases[i] for cases in vals.values())
 
-# Calculate relative values
-for metric in data.values():
-    for country, abs_vals in metric["absolute"].items():
-        for i, val in enumerate(abs_vals):
-            if i == 0:
-                continue
-
-            metric["relative"][country][i] = val - abs_vals[i - 1]
+# Calculate absolute values
+for metric in metrics.values():
+    for country, rel_vals in metric["relative"].items():
+        for i in range(len(rel_vals)):
+            metric["absolute"][country][i] = sum(rel_vals[:i+1])
 
 # Calculate growth
-for metric in data.values():
+for metric in metrics.values():
     for country, rel_vals in metric["relative"].items():
         for i, new_cases in enumerate(rel_vals):
-            if i < 2:
+            if i == 0:
                 continue
 
             prev_cases = rel_vals[i - 1]
@@ -166,20 +195,23 @@ for metric in data.values():
             # Round to 2 digits for friendly user presentation
             metric["growth"][country][i] = round(grw, 2)
 
-# Remove first 2 days from data
-# 1 for relative, 1 for growth
-start_date += timedelta(days=2)
-n_days -= 2
-for metric in data.values():
+# Remove first day from metrics (for growth factor)
+start_date += timedelta(days=1)
+n_days -= 1
+for metric in metrics.values():
     for format_map in metric.values():
         for country, vals in format_map.items():
-            format_map[country] = vals[2:]
+            format_map[country] = vals[1:]
 
-data["dates"] = {
-    "start": start_date.isoformat(),
-    "end": end_date.isoformat(),
-    "count": n_days
+data = {
+    "dates": {
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "count": n_days
+    },
+    **metrics,
+    "populations": populations
 }
 
-with open(sys.argv[4], "w+") as out:
+with open(sys.argv[3], "w+") as out:
     json.dump(data, out)
