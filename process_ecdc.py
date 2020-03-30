@@ -19,8 +19,7 @@ deaths_rel = {}
 deaths_grw = {}
 
 country_overrides = {
-    "JPG11668": "Japan (cruise ship)",
-    "CG": "Republic of the Congo",
+    "JPG11668": "Diamond Princess",
     "CD": "Democratic Republic of the Congo",
     "VA": "Holy See",
     "IR": "Iran",

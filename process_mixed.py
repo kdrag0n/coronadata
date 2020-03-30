@@ -130,36 +130,20 @@ for entry in live:
 #     2. ECDC doesn't have it, so we can't backfill
 del data["recovered"]
 
-# Backfill missing data from ECDC
+# Backfill historical data from ECDC
 for metric_name, metric in data.items():
     for country, values in metric["absolute"].items():
         for i, value in enumerate(values):
-            # Only backfill zero values
-            if value != 0:
-                continue
+            # Only backfill values older than the last two
+            if i == len(values) - 1:
+                break
 
             # Fetch value from ECDC dataset if possible
-            new_value = -1
             if country in ecdc[metric_name]["absolute"]:
                 ecdc_vals = ecdc[metric_name]["absolute"][country]
-                backfill_idx = i + ecdc_date_offset + 1
+                backfill_idx = i + ecdc_date_offset
                 if backfill_idx < len(ecdc_vals):
-                    new_value = ecdc_vals[backfill_idx]
-
-            # Sanity check: is it lower than previous? (or if no previous, 0 [for missing countries])
-            if (i > 0 and new_value < values[i - 1]) or (i == 0 and new_value < 0):
-                if i == 0 or i == len(values) - 1:
-                    # Can't do anything about the first value
-                    new_value = 0
-                elif i == len(values) - 1:
-                    # Use linear interpolation for last value
-                    delta = values[i - 2] - values[i - 2]
-                    new_value = values[i - 1] + delta
-                else:
-                    # Use mean of prev and next
-                    new_value = round((values[i - 1] + values[i + 1]) / 2)
-
-            values[i] = new_value
+                    values[i] = ecdc_vals[backfill_idx]
 
 # Add a meta "Total" country
 for metric in data.values():
