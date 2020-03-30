@@ -68,6 +68,7 @@ with xlrd.open_workbook(sys.argv[1]) as wb:
             iso_country = pycountry.countries.get(alpha_2=country_id)
             if iso_country is None:
                 country = country.replace("_", " ")
+                print(country)
             else:
                 country = getattr(iso_country, "common_name", iso_country.name)
 

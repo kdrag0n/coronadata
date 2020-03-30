@@ -22,15 +22,11 @@ country_overrides = {
 }
 
 ecdc_countries = {
-    "French Guiana": "",
-    "Hong Kong": "",
-    "Puerto Rico": "",
-    "Congo": "",
-    "Botswana": "",
-    "Burundi": "",
-    "Falkland Islands (Malvinas)": "",
-    "French Southern Territories": ""
+    "French Guiana": None,
+    "Hong Kong": "China",
+    "Puerto Rico": "United States"
 }
+
 country_cache = {}
 
 def get_country_name(country_id):
@@ -123,12 +119,10 @@ for entry in live:
 
     data["cases"]["absolute"][country][-1] = cases
     data["deaths"]["absolute"][country][-1] = deaths
-    data["recovered"]["absolute"][country][-1] = recovered
-
-# Don't track recovered:
-#     1. Unreliable
-#     2. ECDC doesn't have it, so we can't backfill
-del data["recovered"]
+    # Don't track recovered:
+    #     1. Unreliable
+    #     2. ECDC doesn't have it
+    # data["recovered"]["absolute"][country][-1] = recovered
 
 # Backfill historical data from ECDC
 for metric_name, metric in data.items():
