@@ -50,7 +50,8 @@ geo_id_overrides = {
 FALLBACK_POPULATION = 33_082_146  # world population / countries
 population_overrides = {
     "Anguilla": 14969,
-    "Eritrea": 3_533_929
+    "Eritrea": 3_533_929,
+    "Falkland Islands": 3454
 }
 
 ecdc_combined_countries = {
@@ -82,10 +83,12 @@ def get_country_name(country_id, geo_id=None, provided_name=""):
     country_cache[cache_key] = country_name
     return country_name
 
+# Load ECDC historical data
 with open(sys.argv[1], "r", encoding="iso-8859-1") as ef:
     reader = csv.DictReader(ef)
     ecdc = list(reader)
 
+# Load thevirustracker.com live data
 live = {}
 with open(sys.argv[2], "r") as lf:
     live_map = json.load(lf)["countryitems"][0]
@@ -96,15 +99,39 @@ with open(sys.argv[2], "r") as lf:
         entry["total_deaths"] = int(entry["total_deaths"])
         live[country] = entry
 
+# Load US state data from New York Times
+with open(sys.argv[3], "r") as statef:
+    reader = csv.DictReader(statef)
+    states = list(reader)
+
+# Load US county data from New York Times
+with open(sys.argv[4], "r") as countyf:
+    reader = csv.DictReader(countyf)
+    counties = list(reader)
+
 # Parse ECDC dates
 for entry in ecdc:
     day = int(entry["day"])
     year = int(entry["year"])
     month = int(entry["month"])
-    # 10:00:00 AM CE(S)T
-    date = datetime(year, month, day, 10, 0, 0, 0)
+    # 10 AM CET/CEST
+    date = datetime(year, month, day, 10, 0, 0)
     tz_date = pytz.timezone("Europe/Brussels").localize(date)
     entry["date"] = tz_date
+
+# Parse NYT dates
+def parse_nyt_date(entry):
+    year, month, day = map(int, entry["date"].split("-"))
+    # 6 PM EST/EDT
+    date = datetime(year, month, day, 18, 0, 0)
+    tz_date = pytz.timezone("America/New_York").localize(date)
+    entry["date"] = tz_date
+
+for entry in states:
+    parse_nyt_date(entry)
+
+for entry in counties:
+    parse_nyt_date(entry)
 
 # Get start and end dates
 start_date = min(ecdc, key=lambda e: e["date"])["date"]
@@ -138,8 +165,8 @@ for entry in ecdc:
     country_name = get_country_name(country_code, entry["geoId"], entry["countriesAndTerritories"])
     cases = int(entry["cases"])
     deaths = int(entry["deaths"])
-
     offset = (entry["date"] - start_date).days
+
     metrics["cases"]["relative"][country_name][offset] += cases
     metrics["deaths"]["relative"][country_name][offset] += deaths
 
@@ -153,9 +180,7 @@ for entry in ecdc:
 
 # Pre-process live metrics to account for ECDC combined countries
 for missing, target in ecdc_combined_countries.items():
-    print(missing, target)
     if missing in live:
-        print(live[target]["total_cases"], live[missing]["total_cases"],live[target]["total_deaths"], live[missing]["total_deaths"])
         live[target]["total_cases"] += live[missing]["total_cases"]
         live[target]["total_deaths"] += live[missing]["total_deaths"]
         del live[missing]
@@ -176,6 +201,38 @@ for metric in metrics.values():
     vals = metric["relative"]
     for i in range(n_days):
         vals["Total"][i] = sum(cases[i] for cases in vals.values())
+
+# Populate US state metrics
+for entry in states:
+    country = f"{entry['state']}, US"
+    cases = int(entry["cases"])
+    deaths = int(entry["deaths"])
+    offset = (entry["date"] - start_date).days
+
+    cases_abs = metrics["cases"]["absolute"][country]
+    cases_abs[offset] = cases
+    deaths_abs = metrics["deaths"]["absolute"][country]
+    deaths_abs[offset] = deaths
+
+    if offset > 0:
+        metrics["cases"]["relative"][country][offset] = cases - cases_abs[offset - 1]
+        metrics["deaths"]["relative"][country][offset] = deaths - deaths_abs[offset - 1]
+
+# Populate US county metrics
+for entry in counties:
+    country = f"{entry['county']} County, {entry['state']}, US"
+    cases = int(entry["cases"])
+    deaths = int(entry["deaths"])
+    offset = (entry["date"] - start_date).days
+
+    cases_abs = metrics["cases"]["absolute"][country]
+    cases_abs[offset] = cases
+    deaths_abs = metrics["deaths"]["absolute"][country]
+    deaths_abs[offset] = deaths
+
+    if offset > 0:
+        metrics["cases"]["relative"][country][offset] = cases - cases_abs[offset - 1]
+        metrics["deaths"]["relative"][country][offset] = deaths - deaths_abs[offset - 1]
 
 # Calculate absolute values
 for metric in metrics.values():
@@ -203,6 +260,13 @@ for metric in metrics.values():
         for country, vals in format_map.items():
             format_map[country] = vals[1:]
 
+# FIXME: strip missing last day for US states and counties
+for metric in metrics.values():
+    for countries in metric.values():
+        for country, values in countries.items():
+            if country.endswith(", US"):
+                values = values[:-1]
+
 data = {
     "dates": {
         "start": start_date.isoformat(),
@@ -213,5 +277,5 @@ data = {
     "populations": populations
 }
 
-with open(sys.argv[3], "w+") as out:
+with open(sys.argv[5], "w+") as out:
     json.dump(data, out)
